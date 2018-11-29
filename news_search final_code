@@ -1,0 +1,136 @@
+import requests
+import urllib.parse
+import json
+import pandas as pd
+from math import ceil
+import pdb
+import time
+
+subscriptionKey = "83956de883a5473dad3dfaaf00252f47"
+search_url = "https://api.cognitive.microsoft.com/bing/v7.0/news/search"
+term = "sports"
+session = requests.Session()
+
+
+def BingnewsSearch(
+    search, count=10, offset=0, mkt="en-US", clientid=None, traceid=None
+):
+    "Performs a Bing Web search and returns the results."
+    headers = {
+        "Ocp-Apim-Subscription-Key": subscriptionKey,
+        "Host": "api.cognitive.microsoft.com",
+        "BingAPIs-Market": "en-US",
+        "User-Agent": "Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; Touch; rv:11.0) like Gecko",
+    }
+    if clientid:
+        headers["X-MSEdge-ClientID"] = clientid
+
+    if traceid:
+        headers["BingAPIs-TraceId"] = traceid
+
+    params = {
+        "q": search,
+        "mkt": mkt,
+        "count": count,
+        "offset": offset,
+        "freshness": "Month",
+    }
+    response = session.get(search_url, headers=headers, params=params)
+    response.raise_for_status()
+    return response
+
+
+if len(subscriptionKey) == 32:
+    print("Searching the news for: ", term)
+    results_count = 50
+    scraped_domains = []
+    response = BingnewsSearch(term)
+    result = response.json()
+    # We will use this clientid in subsequent requests
+    clientid = response.headers.get("X-MSEdge-ClientID")
+    traceid = response.headers.get("BingAPIs-TraceId")
+    totalEstimatedMatches = result["totalEstimatedMatches"]
+    n = (
+        200
+        if totalEstimatedMatches > 10000
+        else round(totalEstimatedMatches / results_count)
+    )
+    df = pd.DataFrame(
+        columns=[
+            "Name",
+            "Description",
+            "URL",
+            "Image",
+            "Provider",
+            "Date Published",
+            "Category",
+        ]
+    )
+
+    for page_number in range(n):
+        offset = results_count * page_number
+        max_limit = totalEstimatedMatches - results_count
+        if max_limit > 0 and offset > max_limit:
+            print(
+                "Offset Value is greater than totalEstimatedMatches: {}".format(
+                    totalEstimatedMatches - results_count
+                )
+            )
+            break
+
+        response = BingnewsSearch(
+            term, count=results_count, offset=offset, clientid=clientid, traceid=traceid
+        )
+        if not clientid:
+            clientid = response.headers["X-MSEdge-ClientID"]
+        if not traceid:
+            traceid = response.headers.get("BingAPIs-TraceId")
+
+        # print("\nJSON Response:\n")
+        # with open("output.json", "w") as f:
+        #     f.write(json.dumps(json.loads(result), indent=4))
+        final_data = []
+        skipped_domains = 0
+        data = response.json()
+        totalEstimatedMatches = data.get("totalEstimatedMatches", 0)
+        print(
+            "PageNumber: {}, Offset: {}, ResultsCOunt: {}, EstimatedMatches: {}".format(
+                page_number + 1, offset, len(data["value"]), totalEstimatedMatches
+            )
+        )
+
+        for i in data["value"]:
+            domain = i["url"]
+            if domain in scraped_domains:
+                # print("Filtered Duplicate domain: {}".format(domain))
+                skipped_domains += 1
+                print("Repeated Index: {}".format(scraped_domains.index(domain)))
+                continue
+            scraped_domains.append(domain)
+            final_data.append(
+                {
+                    "Name": i["name"],
+                    "Description": i.get("description"),
+                    "URL": i.get("url"),
+                    "Image": i.get("image"),
+                    "Provider": i.get("provider"),
+                    "Date Published": i.get("datePublished"),
+                    "Category": i.get("category"),
+                }
+            )
+        print("Total skipped domains in this offset: {}".format(skipped_domains))
+        if final_data:
+            df = df.append(final_data, ignore_index=True)
+        print("Scraped Results: {}".format(len(df)))
+        # print(df.head())
+        time.sleep(5)
+    df.to_csv("output_DATA_NEWS.csv", index=False)
+    with open("scraped_domains.txt", "w") as f:
+        for domain in scraped_domains:
+            f.write(domain)
+            f.write("\n")
+else:
+    print("Invalid Bing Search API subscription key!")
+    print("Please paste yours into the source code.")
+
+session.close()
